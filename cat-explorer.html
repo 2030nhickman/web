@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cat Explorer</title>
+<!--
+  Cat Explorer — a standalone tribute to the Windows 93 (windows93.net) browser.
+  How it works:
+    - The "page" area is an <iframe>. Typing a URL and pressing Go sets iframe.src.
+    - Back/Forward use our own history stack, because a cross-origin iframe's
+      current URL can't be read by the parent page (browser security).
+    - Built-in pages (skynet://, about:cats, ...) are rendered from HTML strings
+      via iframe.srcdoc, and their links talk back to this page with postMessage.
+    - Many big sites (Google, YouTube, GitHub...) send X-Frame-Options / CSP
+      frame-ancestors headers that forbid being shown inside an iframe. A page
+      can't reliably detect that, so after a timeout we show a hint with an
+      "open in a new tab" link.
+-->
+<style>
+  :root {
+    --desk: #008080;
+    --face: #c0c0c0;
+    --hi: #ffffff;
+    --lo: #808080;
+    --dark: #000000;
+    --title1: #000080;
+    --title2: #1084d0;
+    --text: #000000;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--desk);
+    font: 12px/1.3 "MS Sans Serif", Tahoma, Verdana, sans-serif;
+    color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .win {
+    width: min(1000px, 100%);
+    height: min(720px, 100%);
+    background: var(--face);
+    display: flex; flex-direction: column;
+    padding: 3px;
+    box-shadow: inset -1px -1px var(--dark), inset 1px 1px var(--hi),
+                inset -2px -2px var(--lo), inset 2px 2px #dfdfdf;
+  }
+  .title {
+    background: linear-gradient(90deg, var(--title1), var(--title2));
+    color: #fff; font-weight: bold;
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 4px; user-select: none;
+  }
+  .title .cat { width: 16px; height: 16px; }
+  .title span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title button { width: 16px; height: 14px; padding: 0; font-size: 9px; line-height: 1; }
+  button, .btn {
+    background: var(--face); border: 0; font: inherit; color: inherit;
+    padding: 3px 8px; cursor: pointer;
+    box-shadow: inset -1px -1px var(--dark), inset 1px 1px var(--hi),
+                inset -2px -2px var(--lo), inset 2px 2px #dfdfdf;
+  }
+  button:active { box-shadow: inset 1px 1px var(--dark), inset -1px -1px var(--hi),
+                  inset 2px 2px var(--lo); }
+  button:disabled { color: var(--lo); text-shadow: 1px 1px var(--hi); cursor: default; }
+  .menu { display: flex; gap: 2px; padding: 2px 0; }
+  .menu span { padding: 2px 6px; cursor: default; }
+  .menu span:hover { background: var(--title1); color: #fff; }
+  .toolbar { display: flex; gap: 3px; padding: 4px 2px; flex-wrap: wrap; border-top: 1px solid var(--lo); border-bottom: 1px solid var(--hi); }
+  .toolbar button { min-width: 54px; }
+  .addr { display: flex; align-items: center; gap: 4px; padding: 4px 2px; }
+  .addr input {
+    flex: 1; min-width: 0; font: inherit; padding: 3px 4px; border: 0; background: #fff;
+    box-shadow: inset 1px 1px var(--lo), inset -1px -1px var(--hi),
+                inset 2px 2px var(--dark), inset -2px -2px #dfdfdf;
+  }
+  .view {
+    flex: 1; position: relative; background: #fff; margin: 2px;
+    box-shadow: inset 1px 1px var(--lo), inset -1px -1px var(--hi),
+                inset 2px 2px var(--dark), inset -2px -2px #dfdfdf;
+    padding: 2px;
+  }
+  iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+  .hint {
+    position: absolute; left: 12px; right: 12px; bottom: 12px;
+    background: #ffffe1; border: 1px solid #000; padding: 8px 10px; display: none;
+  }
+  .hint.show { display: block; }
+  .hint a { color: #00e; }
+  .status { display: flex; gap: 3px; padding-top: 3px; }
+  .status div {
+    padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    box-shadow: inset 1px 1px var(--lo), inset -1px -1px var(--hi);
+  }
+  .status .msg { flex: 1; }
+  .throbber { width: 26px; height: 26px; margin-left: auto; }
+  .throbber.spin { animation: bob .4s steps(2) infinite; }
+  @keyframes bob { 50% { transform: translateY(-3px) rotate(-8deg); } }
+  @media (max-width: 560px) {
+    body { padding: 0; }
+    .win { height: 100%; }
+    .toolbar button { min-width: 0; padding: 3px 6px; }
+    .menu { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="win" role="application" aria-label="Cat Explorer">
+  <div class="title">
+    <svg class="cat" viewBox="0 0 16 16" aria-hidden="true"><use href="#caticon"/></svg>
+    <span id="wtitle">Cat Explorer</span>
+    <button title="Minimize" aria-label="Minimize">_</button>
+    <button title="Maximize" aria-label="Maximize">□</button>
+    <button title="Close" aria-label="Close" id="closeBtn">×</button>
+  </div>
+  <div class="menu"><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Bookmarks</span><span>Help</span></div>
+  <div class="toolbar">
+    <button id="back" disabled>◀ Back</button>
+    <button id="fwd" disabled>Fwd ▶</button>
+    <button id="reload">↻ Reload</button>
+    <button id="home">⌂ Home</button>
+    <button id="stop">✕ Stop</button>
+    <button id="newtab" title="Open current page in a real browser tab">↗ Pop out</button>
+    <svg class="throbber" id="throbber" viewBox="0 0 16 16" aria-hidden="true"><use href="#caticon"/></svg>
+  </div>
+  <form class="addr" id="addrForm">
+    <label for="url">Address:</label>
+    <input id="url" autocomplete="off" spellcheck="false" placeholder="Type a URL or search Skynet">
+    <button type="submit">Go</button>
+  </form>
+  <div class="view">
+    <iframe id="frame" title="Page" sandbox="allow-scripts allow-forms allow-popups allow-same-origin allow-popups-to-escape-sandbox"></iframe>
+    <div class="hint" id="hint">
+      <b>Meow?</b> If this page stays blank, the site probably refuses to be shown inside
+      a frame (X-Frame-Options / CSP). <a id="hintLink" target="_blank" rel="noopener">Open it in a new tab</a>.
+    </div>
+  </div>
+  <div class="status">
+    <div class="msg" id="status">Done</div>
+    <div>Internet zone</div>
+  </div>
+</div>
+
+<!-- Pixel cat icon (Internet Explorer "e" + Nyan cat parody) -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="caticon" viewBox="0 0 16 16" shape-rendering="crispEdges">
+    <rect x="0" y="5" width="3" height="1" fill="#f00"/><rect x="0" y="6" width="3" height="1" fill="#f90"/>
+    <rect x="0" y="7" width="3" height="1" fill="#ff0"/><rect x="0" y="8" width="3" height="1" fill="#3f0"/>
+    <rect x="0" y="9" width="3" height="1" fill="#09f"/><rect x="0" y="10" width="3" height="1" fill="#63f"/>
+    <rect x="3" y="4" width="8" height="8" fill="#fc9" stroke="#000" stroke-width=".5"/>
+    <rect x="4" y="5" width="6" height="6" fill="#f9c"/>
+    <rect x="5" y="6" width="1" height="1" fill="#f39"/><rect x="8" y="8" width="1" height="1" fill="#f39"/>
+    <path d="M10 6h1V5h1v1h2V5h1v1h1v5h-1v1h-5z" fill="#999" stroke="#000" stroke-width=".5"/>
+    <rect x="11" y="8" width="1" height="1" fill="#000"/><rect x="14" y="8" width="1" height="1" fill="#000"/>
+    <rect x="12" y="10" width="2" height="1" fill="#000"/>
+    <rect x="4" y="12" width="1" height="2" fill="#999"/><rect x="9" y="12" width="1" height="2" fill="#999"/>
+  </symbol>
+</svg>
+
+<script>
+(() => {
+  const HOME = "skynet://";
+  const $ = id => document.getElementById(id);
+  const frame = $("frame"), urlBox = $("url"), statusEl = $("status"),
+        hint = $("hint"), hintLink = $("hintLink"), throbber = $("throbber");
+
+  let history = [], index = -1, hintTimer = null;
+
+  // ---------- built-in pages ----------
+  const baseCss = `body{font:14px/1.4 "Times New Roman",serif;margin:16px;color:#000;background:#fff}
+    a{color:#00e;cursor:pointer}a:visited{color:#551a8b}`;
+  const link = (u, label) => `<a data-go="${u.replace(/"/g, "&quot;")}">${label}</a>`;
+  const bridge = `<script>document.addEventListener("click",e=>{const a=e.target.closest("[data-go]");
+    if(a){e.preventDefault();parent.postMessage({catGo:a.dataset.go},"*")}});
+    document.addEventListener("submit",e=>{e.preventDefault();const q=e.target.q.value;
+    parent.postMessage({catGo:"skynet://search?q="+encodeURIComponent(q)},"*")});<\/script>`;
+  const page = (title, body) =>
+    `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>${baseCss}</style></head><body>${body}${bridge}</body></html>`;
+  const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  const skynetLogo = `<h1 style="font:bold 64px Georgia,serif;margin:40px 0 10px;letter-spacing:-2px">
+    <span style="color:#4285f4">S</span><span style="color:#ea4335">k</span><span style="color:#fbbc05">y</span><span style="color:#4285f4">n</span><span style="color:#34a853">e</span><span style="color:#ea4335">t</span></h1>`;
+
+  const internal = {
+    "skynet://": () => page("Skynet", `<center>${skynetLogo}
+      <p><i>Self-aware search since 1997.</i></p>
+      <form><input name="q" size="40" autofocus> <button>Skynet Search</button></form>
+      <p style="margin-top:30px">
+        ${link("https://en.wikipedia.org/wiki/Windows_93", "Windows 93 on Wikipedia")} ·
+        ${link("https://www.windows93.net", "windows93.net")} ·
+        ${link("about:cats", "about:cats")} ·
+        ${link("about:help", "Help")}
+      </p></center>`),
+
+    "skynet://search": q => {
+      const enc = encodeURIComponent(q);
+      return page(`${esc(q)} - Skynet`, `${skynetLogo.replace("64px", "32px").replace("40px 0 10px", "0")}
+        <form><input name="q" size="40" value="${esc(q)}"> <button>Search</button></form><hr>
+        <p>Skynet found <b>${(q.length * 1337) % 99991 + 3}</b> results for <b>${esc(q)}</b>
+        (0.${q.length} seconds). Judgment Day estimate: soon.</p>
+        <ol>
+          <li>${link("https://en.wikipedia.org/wiki/Special:Search?search=" + enc, "Wikipedia: " + esc(q))}<br><small>Frames nicely inside Cat Explorer.</small></li>
+          <li>${link("https://html.duckduckgo.com/html/?q=" + enc, "DuckDuckGo (HTML): " + esc(q))}<br><small>Lightweight search results.</small></li>
+          <li>${link("https://www.bing.com/search?q=" + enc, "Bing: " + esc(q))}<br><small>May refuse to load in a frame — use Pop out.</small></li>
+          <li>${link("about:cats", "Cats (always relevant)")}</li>
+        </ol>`);
+    },
+
+    "about:cats": () => page("About Cats", `<h1>About:Cats</h1>
+      <pre style="font:16px monospace">
+   /\\_/\\
+  ( o.o )   Cat Explorer 93.0
+   > ^ <    "The browser that purrs."
+      </pre>
+      <p>Rainbow powered. Sleeps 16 hours a day. Knocks websites off the table.</p>
+      <p>${link(HOME, "Back to Skynet")}</p>`),
+
+    "about:help": () => page("Help", `<h1>Cat Explorer Help</h1>
+      <ul>
+        <li>Type a full URL (<code>https://...</code>) or a domain like <code>example.com</code>.</li>
+        <li>Type anything else and it searches Skynet.</li>
+        <li>Built-in pages: ${link("skynet://", "skynet://")}, ${link("about:cats", "about:cats")}, ${link("about:blank", "about:blank")}.</li>
+        <li>Some websites block being displayed inside frames. Use <b>Pop out</b> for those.</li>
+        <li>Back/Forward only track pages opened from the address bar or built-in pages —
+            clicks inside other websites can't be seen by Cat Explorer (browser security).</li>
+      </ul><p>${link(HOME, "Home")}</p>`),
+
+    "about:blank": () => "",
+  };
+
+  // ---------- URL handling ----------
+  function normalize(input) {
+    const s = input.trim();
+    if (!s) return HOME;
+    if (/^(skynet|about):/i.test(s)) return s.toLowerCase().startsWith("skynet://search") ? s : s.toLowerCase();
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(s) && !/\s/.test(s)) return "https://" + s;
+    return "skynet://search?q=" + encodeURIComponent(s);
+  }
+
+  function render(url) {
+    clearTimeout(hintTimer);
+    hint.classList.remove("show");
+    urlBox.value = url;
+    setLoading(true);
+
+    if (url.startsWith("skynet://search")) {
+      const q = new URL(url.replace("skynet://", "http://skynet/")).searchParams.get("q") || "";
+      loadDoc(internal["skynet://search"](q), `${q} - Skynet`);
+    } else if (internal[url]) {
+      loadDoc(internal[url](), url);
+    } else {
+      frame.removeAttribute("srcdoc");
+      frame.src = url;
+      $("wtitle").textContent = url.replace(/^https?:\/\//, "") + " - Cat Explorer";
+      statusEl.textContent = "Opening page " + url + "...";
+      hintLink.href = url;
+      hintTimer = setTimeout(() => hint.classList.add("show"), 4000);
+    }
+    updateButtons();
+  }
+
+  function loadDoc(html, title) {
+    frame.removeAttribute("src");
+    frame.srcdoc = html || "<!doctype html><title>blank</title>";
+    $("wtitle").textContent = title + " - Cat Explorer";
+  }
+
+  function navigate(input) {
+    const url = normalize(input);
+    history = history.slice(0, index + 1);
+    history.push(url);
+    index = history.length - 1;
+    render(url);
+  }
+
+  function go(delta) {
+    const n = index + delta;
+    if (n < 0 || n >= history.length) return;
+    index = n;
+    render(history[index]);
+  }
+
+  function setLoading(on) {
+    throbber.classList.toggle("spin", on);
+    if (!on) statusEl.textContent = "Done";
+  }
+
+  function updateButtons() {
+    $("back").disabled = index <= 0;
+    $("fwd").disabled = index >= history.length - 1;
+  }
+
+  // ---------- wiring ----------
+  frame.addEventListener("load", () => {
+    setLoading(false);
+    // For same-origin/srcdoc pages we can read the title; cross-origin throws.
+    try {
+      const t = frame.contentDocument && frame.contentDocument.title;
+      if (t) $("wtitle").textContent = t + " - Cat Explorer";
+    } catch (_) {}
+  });
+
+  window.addEventListener("message", e => {
+    if (e.source === frame.contentWindow && e.data && typeof e.data.catGo === "string") {
+      navigate(e.data.catGo);
+    }
+  });
+
+  $("addrForm").addEventListener("submit", e => { e.preventDefault(); navigate(urlBox.value); });
+  $("back").onclick = () => go(-1);
+  $("fwd").onclick = () => go(1);
+  $("reload").onclick = () => index >= 0 && render(history[index]);
+  $("home").onclick = () => navigate(HOME);
+  $("stop").onclick = () => {
+    clearTimeout(hintTimer);
+    try { frame.contentWindow.stop(); } catch (_) {}
+    setLoading(false);
+    statusEl.textContent = "Stopped";
+  };
+  $("newtab").onclick = () => {
+    const u = history[index];
+    if (u && /^https?:/.test(u)) window.open(u, "_blank", "noopener");
+    else statusEl.textContent = "Built-in pages can't be popped out.";
+  };
+  $("closeBtn").onclick = () => {
+    statusEl.textContent = "Nice try. Cats don't leave.";
+  };
+  document.addEventListener("keydown", e => {
+    if (e.altKey && e.key === "ArrowLeft") go(-1);
+    if (e.altKey && e.key === "ArrowRight") go(1);
+    if (e.key === "F5") { e.preventDefault(); $("reload").click(); }
+  });
+
+  navigate(HOME);
+})();
+</script>
+</body>
+</html>
