@@ -1,12 +1,14 @@
-# Windows93 Browser Window
+# Windows93 Cat Explorer
 
-Chrome (MV3) extension. Click the toolbar icon to open https://windows93.net in a
-separate popup window created with `chrome.windows.create({ focused: false })`,
-so it opens in the background without taking focus. Right-click any link →
-"Open link in Windows93 window" to load that URL in the same window.
+Chrome (MV3) extension. Click the toolbar icon to open Windows93's actual browser
+app, **Cat Explorer** (`/c/programs/network/CatExplorer/index.html` on windows93.net),
+in its own 640x480 popup window via `chrome.windows.create({ focused: false })`.
 
-Install: `chrome://extensions` → enable Developer mode → Load unpacked → select this folder.
+How it was found: the OS ships as `https://windows93.net/42.tar.gz` plus
+`files.cbor`; the only app in the "Browser" category is `CatExplorer`
+(`app.manifest.json5`: width 640, height 480, `document: "./index.html"`).
+The page loads standalone from its URL, with its own Back/Forward/Home/Reload
+buttons and Location bar.
 
-Note: I haven't tested this against the live site, and I don't know of a public
-API for Windows93's internal browser, so this opens the site itself in its own
-window rather than hooking into the page's browser app.
+Install: `chrome://extensions` → Developer mode → Load unpacked → this folder.
+Not tested in a live Chrome. If the window is already open, clicking again does nothing.

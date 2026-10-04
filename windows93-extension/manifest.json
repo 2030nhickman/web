@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Windows93 Browser Window",
-  "version": "1.0.0",
-  "description": "Opens windows93.net in its own separate browser window, like the browser on the website, without stealing focus.",
-  "permissions": ["contextMenus", "storage"],
+  "name": "Windows93 Cat Explorer",
+  "version": "1.1.0",
+  "description": "Opens Windows93's Cat Explorer browser app in its own separate window, without stealing focus.",
+  "permissions": ["storage"],
   "host_permissions": ["https://windows93.net/*"],
   "background": { "service_worker": "background.js" },
-  "action": { "default_title": "Open Windows93" }
+  "action": { "default_title": "Open Windows93 browser" }
 }
